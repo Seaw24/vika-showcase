@@ -14,10 +14,18 @@ at ~30 fps; no video ever leaves the phone.
 
 ## Demo
 
-<!-- TODO: media/demo.gif — rep counting + voice coaching, live -->
-<!-- TODO: media/empty_room.gif — empty-room capture, zero false reps -->
-*Demo clips coming shortly: live rep counting with Vietnamese voice coaching, and an
-empty-room capture demonstrating zero hallucinated reps.*
+<p align="center">
+  <img src="media/squat_tracking.gif" width="260" alt="Live squat tracking: skeleton overlay, rep counter, Vietnamese coaching cue"/>
+  &nbsp;&nbsp;&nbsp;
+  <img src="media/activation_hold.gif" width="260" alt="Activation: hold a correct start position for 3 seconds to arm the set"/>
+</p>
+
+Real app captures. **Left:** live squat tracking — the smoothed skeleton overlay, the rep
+counter, and a coaching cue (*"LÊN!"* — up!) as the state machine confirms the ascent.
+**Right:** the activation state machine — a set arms only after the user holds a correct start
+position for 3 seconds, which is also the window where their personal baselines are calibrated.
+The footer line in the app reads *"Hình ảnh được xử lý ngay trên máy của bạn"* — your images
+are processed right on your device.
 
 ---
 
