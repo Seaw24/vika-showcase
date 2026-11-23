@@ -1,13 +1,15 @@
 # Vika — an AI form coach that runs entirely on-device
 
-**Flutter · Dart · MediaPipe (BlazePose) · Supabase** — pre-launch, built for the Vietnamese market.
+**Flutter · Dart · MediaPipe (BlazePose) · Supabase** · live on the App Store, ~1,200 downloads, built for the Vietnamese market.
+
+**By the numbers:** 31 exercises (17 rep-counted, 14 timed holds) · ~156K lines of Dart · 2,400+ automated tests · ~30 fps on-device pose tracking
 
 Vika watches you exercise through your phone camera, counts your reps, rejects the fake ones,
 detects form faults, and coaches you by voice in Vietnamese. All pose inference runs on-device
 at ~30 fps; no video ever leaves the phone.
 
 > **This is a showcase repo.** The production codebase is private (it is a company codebase with
-> tuned, physician-reviewed detection thresholds). The excerpts here are real production code,
+> tuned detection thresholds). The excerpts here are real production code,
 > lightly abridged. Full source walkthrough available in interviews — ducnam883@gmail.com.
 
 ---
@@ -46,7 +48,7 @@ are processed right on your device.
 
 ```mermaid
 flowchart TD
-    A[Camera frame] --> B[MediaPipe Pose Landmarker<br/>BlazePose · 33 landmarks · GPU delegate]
+    A[Camera frame] --> B[MediaPipe Pose Landmarker<br/>BlazePose · 33 landmarks · GPU delegate on iOS]
     B --> C[One Euro filter smoothing<br/>velocity-adaptive, per landmark]
     C --> D[Presence gate<br/>per-landmark existence check +<br/>selfie-segmentation recheck]
     D --> E[Side & orientation resolution<br/>front vs side auto-detected from<br/>shoulder-width / torso-height ratio]
@@ -61,8 +63,8 @@ camera, the filter, or presence logic.
 
 ## The exercise framework
 
-The product needed ~40 exercises built by a two-person team in two months. That only works if
-adding an exercise is *cheap*, so the framework is a strict template method: the base class owns
+The product needs dozens of exercises from a very small team. That only works if adding an
+exercise is *cheap*, so the framework is a strict template method: the base class owns
 the entire per-frame pipeline, the activation lifecycle, baseline calibration, and the attempt
 boundary. A concrete exercise contributes only **declaration and geometry**:
 
@@ -76,7 +78,7 @@ boundary. A concrete exercise contributes only **declaration and geometry**:
 
 Everything else — sampling a personal baseline during the 3-second activation hold, freezing it,
 drift-refreshing it only during calm in-band frames, accept/reject bookkeeping at the attempt
-boundary — is inherited. Two developers shipped 40 exercises in two months on this surface.
+boundary — is inherited. All 31 shipped exercises run on this surface.
 
 → [`excerpts/prepared_exercise_base.dart`](excerpts/prepared_exercise_base.dart)
 
@@ -131,6 +133,10 @@ edge.
   channel) so the coach never turns into a metronome.
 - **Data honesty as a rule** — coaching text is generated only from fault counts the system
   actually measured. The app never tells a user something it didn't see.
+- **Thresholds tuned on real sessions** — a recorded set saves a trace of its pose landmarks, never
+  video. A replay tool feeds those traces back through the production exercise code, so a threshold change is
+  measured against real device sessions before it ships. Example: over 16,375 replayed frames, a
+  5-frame stillness window cut moving frames misread as still from 1,418 to 1,068.
 - **Testing the failure modes that matter** — widget tests load the real production font
   (the test-default font measures text ~2× too wide and green-lights layouts that truncate
   Vietnamese diacritics on device) and assert against *silent* truncation, not just thrown
