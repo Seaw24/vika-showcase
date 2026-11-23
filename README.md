@@ -1,4 +1,4 @@
-# Vika — an AI form coach that runs entirely on-device
+# Vika - an AI form coach that runs entirely on-device
 
 **Flutter · Dart · MediaPipe (BlazePose) · Supabase** · [live on the App Store](https://apps.apple.com/us/app/id6768359920?pt=128883254&ct=github), ~1,200 downloads, built for the Vietnamese market.
 
