@@ -1,13 +1,15 @@
 # Vika — an AI form coach that runs entirely on-device
 
-**Flutter · Dart · MediaPipe (BlazePose) · Supabase** — pre-launch, built for the Vietnamese market.
+**Flutter · Dart · MediaPipe (BlazePose) · Supabase** · [live on the App Store](https://apps.apple.com/us/app/id6768359920?pt=128883254&ct=github), ~1,200 downloads, built for the Vietnamese market.
+
+**By the numbers:** 31 exercises (17 rep-counted, 14 timed holds) · ~156K lines of Dart · 2,400+ automated tests · ~30 fps on-device pose tracking
 
 Vika watches you exercise through your phone camera, counts your reps, rejects the fake ones,
 detects form faults, and coaches you by voice in Vietnamese. All pose inference runs on-device
 at ~30 fps; no video ever leaves the phone.
 
 > **This is a showcase repo.** The production codebase is private (it is a company codebase with
-> tuned, physician-reviewed detection thresholds). The excerpts here are real production code,
+> tuned detection thresholds). The excerpts here are real production code,
 > lightly abridged. Full source walkthrough available in interviews — ducnam883@gmail.com.
 
 ---
@@ -46,7 +48,7 @@ are processed right on your device.
 
 ```mermaid
 flowchart TD
-    A[Camera frame] --> B[MediaPipe Pose Landmarker<br/>BlazePose · 33 landmarks · GPU delegate]
+    A[Camera frame] --> B[MediaPipe Pose Landmarker<br/>BlazePose · 33 landmarks · GPU delegate on iOS]
     B --> C[One Euro filter smoothing<br/>velocity-adaptive, per landmark]
     C --> D[Presence gate<br/>per-landmark existence check +<br/>selfie-segmentation recheck]
     D --> E[Side & orientation resolution<br/>front vs side auto-detected from<br/>shoulder-width / torso-height ratio]
@@ -61,42 +63,49 @@ camera, the filter, or presence logic.
 
 ## The exercise framework
 
-The product needed ~40 exercises built by a two-person team in two months. That only works if
-adding an exercise is *cheap*, so the framework is a strict template method: the base class owns
-the entire per-frame pipeline, the activation lifecycle, baseline calibration, and the attempt
-boundary. A concrete exercise contributes only **declaration and geometry**:
+The product needs dozens of exercises from a very small team. That only works if adding an
+exercise is *cheap*, so the framework is a strict template method. The base class owns the
+per-frame pipeline, the activation lifecycle, baseline calibration, the attempt boundary and
+**one shared phase machine** (`rest → outbound → apex → inbound`) that runs every rep exercise.
+A concrete exercise contributes only **declaration and geometry**:
 
 | Hook | What the exercise supplies |
 |---|---|
-| `requiredSideLandmarks` | which landmarks this movement needs |
-| `isInPreparedStartPosition(frame)` | pure setup geometry: is this a valid start? |
-| `updateStateMachine(frame)` | the movement's phase transitions |
-| `buildContext(frame)` / `buildCompletion(frame)` | typed evidence handed to metrics |
-| `formMetrics` / `antiMetrics` | composed per-aspect analyzers (see below) |
+| `returnSignal` | the one signal that defines the movement (squat: knee angle, closing), its noise floor and its direction rate per second |
+| `phasePlan` | where the apex line sits and how close to rest counts as back |
+| `deriveRepFrame(landmarks)` | the geometry: joint angles and distances for this frame |
+| `bufferedSignals(frame)` | which signals the motion buffer tracks |
+| `metrics` | one collection of form and anti-cheat metrics (see below) |
+| `boundaryBindings` | checks resolved once per attempt, such as the squat's cheat line on depth |
+| `onFrameHook(frame)` | projecting the generic phase onto the exercise's own names |
 
-Everything else — sampling a personal baseline during the 3-second activation hold, freezing it,
-drift-refreshing it only during calm in-band frames, accept/reject bookkeeping at the attempt
-boundary — is inherited. Two developers shipped 40 exercises in two months on this surface.
+Everything else is inherited: sampling a personal baseline during the 3-second activation hold,
+the 150 ms entry-intent confirm that keeps jitter from opening an attempt, direction read over
+real elapsed time instead of frame deltas, stillness and retrace for credit, and accept or
+reject bookkeeping at the boundary. All 31 shipped exercises (17 rep, 14 hold) run on these
+bases, and the squat leaf is about 340 lines.
 
-→ [`excerpts/prepared_exercise_base.dart`](excerpts/prepared_exercise_base.dart)
+→ [`excerpts/rep_exercise_base.dart`](excerpts/rep_exercise_base.dart) · [`excerpts/squat.dart`](excerpts/squat.dart)
 
 ## Metrics: form coaching and anti-cheat are separate channels
 
-Every form aspect (depth, tempo, body line, neck position…) is a small `Metric` object with a
+Every form aspect (depth, tempo, trunk lean, heel lift…) is a small `Metric` object with a
 shared lifecycle contract: per-frame `update`, state-transition hooks, fault recording with
-per-attempt dedup, and log aggregation. Exercises compose metrics instead of growing a god class.
+per-attempt dedup, and rep counting. Exercises compose metrics instead of growing a god class.
 
-The important design decision: **anti-cheat metrics are the same class, registered in a separate
-collection.** The two channels answer different questions:
+The important design decision: **anti-cheat metrics are the same class with one different
+word.** Each metric declares a channel, and the engine derives every routing, halting and
+counting rule from it:
 
-- The **anti channel** answers *"is this even the exercise?"* — a squat that never leaves
-  standing, a plank lying on the floor. Its faults gate credit: the attempt is rejected, not
-  coached.
-- The **form channel** answers *"was that rep good?"* — a marginal-but-real attempt is always
+- The **credit channel** answers *"is this even the exercise?"*: a squat that never leaves
+  standing, a knee that folds without the thigh moving. Its faults refuse the attempt out loud.
+- The **coach channel** answers *"was that rep good?"*: a marginal-but-real attempt is always
   **counted and coached, never blocked**. Guide, don't punish.
 
 This split is a product stance as much as an architecture: users lose trust instantly when a
-real rep doesn't count, and gain nothing from being coached on a rep that never happened.
+real rep doesn't count, and gain nothing from being coached on a rep that never happened. A
+metric that can decline to judge a rep also publishes how many reps it actually judged, so a
+fault rate never turns into praise for something nobody measured.
 
 → [`excerpts/metric_base.dart`](excerpts/metric_base.dart)
 
@@ -131,6 +140,10 @@ edge.
   channel) so the coach never turns into a metronome.
 - **Data honesty as a rule** — coaching text is generated only from fault counts the system
   actually measured. The app never tells a user something it didn't see.
+- **Thresholds tuned on real sessions** — a recorded set saves a trace of its pose landmarks, never
+  video. A replay tool feeds those traces back through the production exercise code, so a threshold change is
+  measured against real device sessions before it ships. Example: over 16,375 replayed frames, a
+  5-frame stillness window cut moving frames misread as still from 1,418 to 1,068.
 - **Testing the failure modes that matter** — widget tests load the real production font
   (the test-default font measures text ~2× too wide and green-lights layouts that truncate
   Vietnamese diacritics on device) and assert against *silent* truncation, not just thrown
@@ -139,8 +152,7 @@ edge.
 ## Validation before code
 
 Vika was market-tested before it was built: a 151-respondent survey defined the target customer
-(Vietnamese office workers, 25–45) and set the launch price. The exercise catalog (126 movements
-across strength and yoga) was reviewed with a physician advisor; detection mechanics for each
+(Vietnamese office workers, 25–45) and set the launch price. Detection mechanics for each
 exercise are specified against physical-therapy sources before implementation.
 
 ---

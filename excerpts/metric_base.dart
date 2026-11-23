@@ -1,58 +1,55 @@
-// Abridged from production source (lib/exercise/metric_base.dart).
-// Internal doc references removed; logic unchanged.
+// Abridged from production source (lib/exercise/core/metric/metric_base.dart).
+// Every form aspect and every anti-cheat rule is a small metric object with this
+// lifecycle. Elided: movement-end span measurement, set-log aggregation.
 
-import 'dart:collection';
+/// Which machinery a metric's faults feed.
+///
+/// A [coach] fault becomes coaching and the rep log; a [credit] fault refuses
+/// the attempt at its boundary. The credit channel answers "is this even the
+/// exercise?", never "is this good form?". A marginal-but-real attempt is
+/// COUNTED and COACHED: guide, never block.
+enum MetricChannel { coach, credit }
 
-import 'fault_record.dart';
+/* MetricBase: lifecycle contract for every exercise metric.
 
-/* =========================================================================
-   MetricBase — generic lifecycle contract for every exercise metric.
+   TContext    the exercise's typed per-frame context (e.g. SquatMetricContext)
+   TState      the exercise's phase enum (e.g. SquatState)
+   TCompletion the exercise's typed rep/attempt-completion context
 
-   TContext    — the exercise's typed per-frame context (e.g. Squat RepContext)
-   TState      — the exercise's phase enum (e.g. SquatState)
-   TCompletion — the exercise's typed rep/attempt-completion context
+   The base owns fault mechanics (per-instance store, read-only exposure,
+   count-on-completed-rep, reset). A concrete metric owns only its detection
+   logic, its fault identity rule, its routing facts ([channel], [samplesRest])
+   and its own temporal state (debouncers, windows, per-rep extrema).
 
-   The base owns the fault mechanics form metrics used to re-declare:
-   per-instance storage, read-only exposure, count-on-completed-rep, and the
-   clear/reset lifecycle. A concrete metric owns only its detection logic,
-   the identity rule for the fault it measures, and genuinely metric-specific
-   temporal state (debouncers, windows, per-rep extrema, durations).
-
-   Credit-validity (anti-cheat) metrics share this exact lifecycle — same
-   hooks, same FaultRecord store, same priority rule. The one difference is
-   composition: the exercise registers them in a SEPARATE collection, so
-   their faults gate credit at the attempt boundary instead of feeding
-   coaching and logs.
-
-   Channel semantics: the anti channel answers "is this even the exercise?"
-   — completely broken form, like a plank on the floor or squat micro-pumps
-   that never leave standing — never "is this good form?". A
-   marginal-but-real attempt is COUNTED and COACHED by the form channel:
-   guide, never block. When a cheating state is detectable PER FRAME, anti
-   metrics gate the form channel live — form metrics do not coach a
-   non-attempt. A boundary-only signal needs no live gate; the rep-exercise
-   gating mechanism is built with the first exercise that needs it, not
-   speculatively.
-   ========================================================================= */
+   Anti-cheat metrics share this exact lifecycle. They differ only in the
+   declared [channel], which MetricCollection derives every routing, halting
+   and counting rule from. */
 abstract class MetricBase<TContext, TState, TCompletion> {
-  /// Human-readable name for debug/logging.
-  String get name;
-
   final List<FaultRecord> _faults = [];
+
+  /// Fault routing. Only a credit-gating metric declares otherwise.
+  MetricChannel get channel => MetricChannel.coach;
+
+  /// Rest frames are WITHHELD by default, so an unguarded peak/min tracker can
+  /// never silently eat rest posture. Nothing may fire from a rest frame: rest
+  /// is recovery, not a lapse.
+  bool get samplesRest => false;
 
   /// Completed reps on which this metric recorded at least one fault.
   int faultsCount = 0;
 
-  /// Faults accumulated for the attempt in progress. Read-only view; only the
-  /// base mutates the store.
+  /// Completed reps this metric actually JUDGED, the denominator of
+  /// [faultsCount]. Only meaningful when [canDeclineToJudge].
+  int judgedCount = 0;
+
+  /// Faults for the attempt in progress. Read-only; only the base mutates.
   List<FaultRecord> get faults => UnmodifiableListView(_faults);
 
   /// Called every frame while the exercise processes an active attempt.
   void update(TContext ctx);
 
-  /// Record a fault. The concrete metric supplies its identity rule via
-  /// [duplicateOf]; a fault matching an already-recorded one is dropped so
-  /// a condition persisting across frames yields one record per attempt.
+  /// Record a fault. A fault matching an already-recorded one is dropped, so a
+  /// condition persisting across frames yields one record per attempt.
   void recordFault(
     FaultRecord fault, {
     bool Function(FaultRecord existing)? duplicateOf,
@@ -61,44 +58,43 @@ abstract class MetricBase<TContext, TState, TCompletion> {
     _faults.add(fault);
   }
 
-  /// Called on every exercise phase transition, with the typed frame context
-  /// the transition was decided on. Override in metrics that track time,
-  /// direction, or boundary geometry (tempo, sync, anti-cheat).
+  /// Every phase transition, with the frame the transition was decided on.
   void onStateTransition(TState from, TState to, TContext context) {}
 
-  /// Accepted completion hook. The exercise calls this only after its
-  /// anti-cheat collection recorded no rejection faults for the attempt.
-  /// Completion-only form metrics (depth, tempo) override; default is a no-op.
+  /// Broadcast at the completion edge BEFORE the credit scan reads the
+  /// collection, so a fault recorded here still gates credit. [value] is the
+  /// attempt's peak driver excursion; the base owns the reading.
+  void onAttemptBoundary(double value) {}
+
+  /// Broadcast only on an attempt no credit metric refused, and only to coach
+  /// metrics (depth, tempo).
   void onRepComplete(TCompletion completion) {}
 
-  /// Metric-owned values copied into the accepted rep's log before reset.
-  Map<String, dynamic> get repLogFields => const {};
+  /// True when this metric can DECLINE to judge a rep (no span measured, the
+  /// milestone never reached). A fault-count-only score cannot tell "no rep
+  /// had this fault" from "this metric never got to judge a rep". The second
+  /// reads as a clean 1.0 and becomes praise for something nobody measured.
+  /// Publishing the denominator is what keeps coaching honest.
+  bool get canDeclineToJudge => false;
 
-  /// Frozen log key for this metric's completed-faulted-reps count;
-  /// null (the anti-cheat default) = not logged.
-  String? get failsCountKey => null;
+  /// Whether THIS attempt gave the metric enough evidence for a verdict.
+  bool get judgedThisAttempt => true;
 
-  /// Metric-owned set summary values. Default derives from [failsCountKey];
-  /// override only for a genuinely different set aggregate.
-  Map<String, dynamic> get setLogFields =>
-      failsCountKey == null ? const {} : {failsCountKey!: faultsCount};
-
-  /// Metric-specific temporal state reset. The base owns fault clearing;
-  /// override this instead of [reset].
+  /// Metric-specific temporal state reset. Override this, not [reset].
   void resetMetricState() {}
 
-  /// Aborted attempt: clear without counting.
+  /// Aborted or refused attempt: clear without counting. A no-counted attempt
+  /// enters neither [faultsCount] nor [judgedCount].
   void reset() {
     _faults.clear();
     resetMetricState();
   }
 
-  /// Completed rep: count this rep as faulted if anything was recorded, then
-  /// clear for the next attempt.
+  /// Completed rep: count it as judged, and as faulted if anything was
+  /// recorded, then clear for the next attempt.
   void resetAndCountFault() {
-    if (_faults.isNotEmpty) {
-      faultsCount++;
-    }
+    if (canDeclineToJudge && judgedThisAttempt) judgedCount++;
+    if (_faults.isNotEmpty) faultsCount++;
     reset();
   }
 }
