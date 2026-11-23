@@ -1,6 +1,6 @@
-// Abridged from production source (lib/exercise/exercise_base.dart and the
-// person-detection utilities). The two-line filter at the bottom is the whole
-// fix; the comments are the reason it works.
+// Abridged from production source (lib/exercise/core/base/exercise_base.dart
+// and lib/exercise/core/signal/presence_gate.dart). The two-line filter at the
+// bottom is the whole fix; the comments are the reason it works.
 
 /*
   The false-rep problem
@@ -41,19 +41,44 @@
   fail differently, which is the point.
 */
 
-abstract class ExerciseBase {
+abstract class ExerciseBase<TFrame extends ExerciseFrame> {
   /// Probability the landmark actually exists in the predicted skeleton.
   /// Drops cleanly when a person leaves frame; stays high for legitimately
   /// occluded landmarks such as the back leg in side-view squats.
   static const double MIN_PRESENCE = 0.7;
 
-  /// Probability the landmark is unoccluded given that it exists.
-  /// Deliberately permissive — used only as a secondary gate to reject
-  /// fully extrapolated landmarks, never to judge occluded-but-real ones.
-  static const double MIN_VISIBILITY = 0.3;
+  /// Probability the landmark is unoccluded given that it exists. Used only as
+  /// a secondary gate to reject fully extrapolated landmarks. Lowered from 0.3
+  /// after replayed traces showed 0.3 refusing the occluded far-side arm on
+  /// 11-12% of honest side-view readings. Fully extrapolated landmarks read
+  /// ~0.015 at walkout, so 0.10 still rejects them.
+  static const double _MIN_VISIBILITY = 0.10;
 
   static bool isLandmarkConfident(PoseLandmark landmark) {
     return landmark.presence >= MIN_PRESENCE &&
-        landmark.visibility >= MIN_VISIBILITY;
+        landmark.visibility >= _MIN_VISIBILITY;
   }
+}
+
+/// Runs before any exercise logic on every frame: person confirm, auto-pause
+/// and resume, and the triggers that wake the segmentation detector.
+class PresenceGate {
+  static const Duration _PERSON_CONFIRM_DURATION = Duration(milliseconds: 400);
+  static const Duration _PERSON_LOST_GRACE = Duration(milliseconds: 400);
+  static const Duration _PERSON_RESUME_CONFIRM_DURATION =
+      Duration(milliseconds: 320);
+
+  // Average landmark presence below this wakes a segmentation check. Raised
+  // from 0.35 after 30 recorded walkouts showed the check firing late: the
+  // average stays well above 0.35 while the model is still hallucinating a
+  // half-visible body.
+  static const double _AVG_LOW_PRESENCE_THRESHOLD = 0.55;
+
+  // Frame-edge risk: a person is likely cropped when enough visible joints sit
+  // at or past the frame boundary.
+  static const double _FRAME_EDGE_MARGIN_RATIO = 0.04;
+  static const int _FRAME_EDGE_OUTSIDE_COUNT = 2;
+  static const int _FRAME_EDGE_NEAR_EDGE_COUNT = 5;
+
+  // ... onPose / onNoPose state machine elided
 }
